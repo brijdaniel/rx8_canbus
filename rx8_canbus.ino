@@ -183,9 +183,9 @@ void loop() {
                 // If temp too high then turn on fans
                 if (fan_status==0 && coolant_temp>=90) {
                     toggle_fan();
-                }// else if (fan_status==1 && coolant_temp<=86) {
-                   // toggle_fan();
-                //}
+                } else if (fan_status==1 && coolant_temp<=86) {
+                    toggle_fan();
+                }
             }
         }
 
