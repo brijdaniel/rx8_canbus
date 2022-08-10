@@ -28,6 +28,22 @@ int MSGIdentifier=0;
 int coolant_temp = 0;
 bool fan_status = 0;
 
+// steinhart from here https://www.allaboutcircuits.com/industry-articles/how-to-obtain-the-temperature-value-from-a-thermistor-measurement/
+float L1 = log(23700); //lowest temp = -20
+float L2 = log(286); //middle temp = 80
+float L3 = log(24.8); //highest temp = 179
+
+float Y1 = -1/20;
+float Y2 = 1/80;
+float Y3 = 1/179;
+
+float G2 = (Y2-Y1)/(L2-L1);
+float G3 = (Y3-Y1)/(L3-L1);
+
+float C = (1/(L1+L2+L3))*((G3-G2)/(L3-L2));
+float B = G2 - C*(pow(L1, 2) + L1*L2 + pow(L2, 2));
+float A = Y1 - L1*(B + pow(L1, 2)*C);
+
 void setup() {
     Serial.begin(38400);
     START_INIT:
@@ -89,8 +105,8 @@ int oil_temp(void) {
     // which analog pin to connect
     #define THERMISTORPIN A0
 
-    // Measuring across 2.75kOhm resistor
-    float R1 = 2750;
+    // Measuring across 10kOhm resistor
+    float R2 = 10000;
 
     // Samples to average over
     #define NUMSAMPLES 5
@@ -111,29 +127,44 @@ int oil_temp(void) {
     }
     average /= NUMSAMPLES;
 
+    // convert ADC samples to volts
+    float voltage = average*(5.0/1023.0);
+    Serial.print("Oil Temp Voltage: ");
+    Serial.println(voltage);
+
     // convert the value to resistance
-    float logR2, R2, T;
-    average = 1023 / average - 1;
-    R2 = R1 / average;
+    // R1 = R2*(Vin/Vout - 1)
+    float R1;
+    R1 = R2*(5/voltage -1);
     
     // convert resistance to temperature (degC)
-    float c1 = 1.009249522e-03, c2 = 2.378405444e-04, c3 = 2.019202697e-07;
-    logR2 = log(R2);
-    T = (1.0 / (c1 + c2*logR2 + c3*logR2*logR2*logR2));
-    T = T - 273.15;
+    // use steinhart vals calculated above
+    float T = 1 / (A + B*log(R1) + C*pow(log(R1), 3));
+    T = T - 273;
+    
+    
     /*
-    float steinhart;
-    steinhart = average / 2250;     // (R/Ro)
+    float logR1, T;
+    float c1 = 1.009249522e-03, c2 = 2.378405444e-04, c3 = 2.019202697e-07;
+    logR1 = log(R1);
+    T = (1.0 / (c1 + c2*logR1 + c3*logR1*logR1*logR1));
+    T = T - 273.15;
+
+    // or steinhart method
+    float steinhart, T;
+    steinhart = R1 / R2;     // (R/Ro)
     steinhart = log(steinhart);                  // ln(R/Ro)
     steinhart /= 3950;                   // 1/B * ln(R/Ro)
     steinhart += 1.0 / (25 + 273.15); // + (1/To)
     steinhart = 1.0 / steinhart;                 // Invert
     steinhart -= 273.15;  
+    T = steinhart;
     */
+    
     Serial.print("Oil Temperature: "); 
     Serial.print(T);
     Serial.print(", Thermistor resistance "); 
-    Serial.println(average);
+    Serial.println(R1);
     return T;
 }
 
@@ -141,9 +172,10 @@ int oil_pressure(void) {
     // which analog pin to connect
     #define SENSORPIN A1
 
-    // take N samples in a row, with a slight dela
+    // take N samples in a row, with a slight delay
     uint8_t i;
     float average;
+    float pressure;
     int samples[NUMSAMPLES];
     for (i=0; i< NUMSAMPLES; i++) {
     samples[i] = analogRead(SENSORPIN);
@@ -157,7 +189,17 @@ int oil_pressure(void) {
     }
     average /= NUMSAMPLES;
 
-    //pressure = *average + 0.5
+    // convert ADC samples to volts
+    float voltage = average*(5.0/1023.0);
+    
+    Serial.print("Oil Pressure Voltage: ");
+    Serial.println(voltage);
+
+    // Convert voltage to pressure based on graph provided by Redarc
+    pressure = 36*voltage - 18; // This is not perfect but pretty close (~1psi)
+    Serial.print("Oil Pressure (psi): ");
+    Serial.println(pressure);
+    return pressure;
 }
 
 void loop() {
@@ -194,12 +236,12 @@ void loop() {
             //print_can_msg();
             // If request for oil temp (PID 92)
             if (buf[2]==92) {
-                unsigned char AnalogRead[7] = {4, 65, 92, oil_temp(), 224, 185, 147}; // <len, mode (65=0x41=1), pid, data, data, data, data>
-                CAN.sendMsgBuf(0x7E8, 0, 7, AnalogRead); // canID 0x7E8 = 2024 = response to request
+                unsigned char OilTempRead[7] = {4, 65, 92, oil_temp(), 224, 185, 147}; // <len, mode (65=0x41=1), pid, data, data, data, data>
+                CAN.sendMsgBuf(0x7E8, 0, 7, OilTempRead); // canID 0x7E8 = 2024 = response to request
             // If request for oil pressure (PID 205)
             } else if(buf[2]==205) {
-                unsigned char AnalogRead[7] = {4, 65, 205, oil_pressure(), 224, 185, 147};
-                CAN.sendMsgBuf(0x7E8, 0, 7, AnalogRead);
+                unsigned char OilPressureRead[7] = {4, 65, 205, oil_pressure(), 224, 185, 147};
+                CAN.sendMsgBuf(0x7E8, 0, 7, OilPressureRead);
             }
         }
     }
